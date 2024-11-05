@@ -91,48 +91,69 @@ class VideoConverterApp:
             self.input_folder = folder_selected
             self.config.update("Settings", "input_folder", folder_selected)
 
+    def get_dynamic_cq(
+        self, width, height, min_cq=16, max_cq=30, ref_resolution=(1920, 1080)
+    ):
+        if width is None or height is None:
+            self.log_message("Larghezza o altezza video non valide.")
+            return None
+        ref_width, ref_height = ref_resolution
+        ref_area = ref_width * ref_height
+        video_area = width * height
+
+        # Calcola un fattore di scala rispetto alla risoluzione di riferimento
+        scaling_factor = (ref_area / video_area) ** 0.5
+
+        # Applica il fattore di scala tra i limiti di CQ
+        dynamic_cq = max(min_cq, min(int(max_cq * scaling_factor), max_cq))
+
+        return dynamic_cq
+
     def get_video_info(self, input_path):
-        command = [
-            self.ffprobe_path,
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height:format=duration",
-            "-of",
-            "csv=p=0",
-            input_path,
-        ]
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=True,
-                creationflags=self.creationflags,
-                startupinfo=self.startupinfo,
-            )
+        command = [self.ffmpeg_path, "-i", input_path]
+        process = subprocess.Popen(
+            command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        )
+        stdout, stderr = process.communicate()
 
-            # Pulisce l'output utilizzando espressioni regolari per trovare solo i numeri
-            values = re.findall(r"[\d.]+", result.stdout.strip())
-
-            # Controlla se abbiamo ottenuto esattamente tre valori per larghezza, altezza e durata
-            if len(values) < 3:
-                raise ValueError("Output di ffprobe incompleto o non valido")
-
-            width, height, duration = map(float, values[:3])
-            return int(width), int(height), duration
-
-        except Exception as e:
-            self.log_message(f"Errore: {str(e)}")
+        # Trova le informazioni sulla risoluzione
+        match = re.search(r"(\d{2,5})x(\d{2,5})", stderr)
+        if match:
+            width_str, height_str = match.groups()
+            try:
+                width = int(width_str.strip())
+                height = int(height_str.strip())
+            except ValueError:
+                self.log_message(
+                    f"Errore nel parsing della risoluzione del video: {width_str}x{height_str}"
+                )
+                return None, None, None
+        else:
+            self.log_message("Risoluzione del video non trovata.")
             return None, None, None
+
+        # Trova la durata del video
+        duration_match = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", stderr)
+        if duration_match:
+            hours, minutes, seconds = map(float, duration_match.groups())
+            duration = hours * 3600 + minutes * 60 + seconds
+        else:
+            duration = None  # Durata non trovata
+
+        return width, height, duration
 
     def convert_video(self, input_path, output_path, file_index, total_files):
         width, height, duration = self.get_video_info(input_path)
-        if duration is None:
+        if duration is None or width is None or height is None:
+            self.log_message(
+                f"Impossibile ottenere informazioni video per {input_path}."
+            )
             return
 
+        self.log_message(
+            f"Risoluzione video: {width}x{height}, Durata: {duration} secondi."
+        )
+        # cq = self.get_dynamic_cq(width, height)
         scale_filter = (
             "scale=1280:720,format=yuv420p"
             if (width > 1280 or height > 720)
@@ -149,7 +170,7 @@ class VideoConverterApp:
             scale_filter,
             "-c:v",
             "h264_nvenc",
-            "-crf",
+            "-cq",
             str(self.crf_value),
             "-preset",
             "fast",
@@ -161,7 +182,7 @@ class VideoConverterApp:
             "128k",
             output_path,
         ]
-
+        self.log_message(f"Parametri impostati: CQ={self.crf_value},{scale_filter}")
         start_time = perf_counter()
         process = subprocess.Popen(
             command,
@@ -170,7 +191,6 @@ class VideoConverterApp:
             creationflags=self.creationflags,
             startupinfo=self.startupinfo,
         )
-        
         self.file_label.config(text=f"Converting: {os.path.basename(input_path)}")
         self.status_label.config(text=f"Conversione {file_index}/{total_files}: 0%")
 
@@ -182,25 +202,17 @@ class VideoConverterApp:
                 self.progress_bar["value"] = progress
                 remaining_time = max(duration - current_time, 0)
                 estimated_time = str(timedelta(seconds=int(remaining_time)))
-
                 self.status_label.config(
                     text=f"Conversione {file_index}/{total_files}: {int(progress)}% - Rimanente: {estimated_time}"
                 )
                 self.status_label.update_idletasks()
 
         process.wait()
-        
-        if process.returncode != 0:
-            error_message = process.stderr.read()
-            self.log_message(f"Errore durante la conversione: {error_message}")
-            return
-        
         end_time = perf_counter()
         elapsed_time = end_time - start_time
         self.log_message(
-            f"Conversione completata per '{os.path.basename(output_path)}' in {timedelta(seconds=int(elapsed_time))}"
+            f"Conversione completata in {timedelta(seconds=int(elapsed_time))}"
         )
-
 
     def parse_time_to_seconds(self, time_str):
         h, m, s = map(float, time_str.split(":"))
@@ -225,8 +237,8 @@ class VideoConverterApp:
 
         for index, input_path in enumerate(file_paths, start=1):
             output_path = os.path.join(
-                self.input_folder,
-                f"{os.path.splitext(os.path.basename(input_path))[0]}_nw{os.path.splitext(input_path)[1]}",
+                os.path.dirname(input_path),
+                f"{os.path.splitext(os.path.basename(input_path))[0]}_nw.mp4",
             )
             self.convert_video(input_path, output_path, index, total_files)
 
