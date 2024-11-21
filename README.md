@@ -53,11 +53,15 @@ If FFmpeg is missing, navigate to the **"Download FFmpeg"** tab:
 
 ## Screenshots
 
-**Conversion Tab**  
-> [Include a screenshot of the conversion tab here]
+**Conversion Tab**
 
-**Download FFmpeg Tab**  
-> [Include a screenshot of the FFmpeg download tab here]
+![Immagine 2024-11-21 215533](https://github.com/user-attachments/assets/345e65d4-8b36-4de6-b0f6-37be2f62dbc4)
+
+
+**Download FFmpeg Tab**
+
+![Immagine 2024-11-21 215518](https://github.com/user-attachments/assets/8ea3cecf-253b-4046-99a8-46a91ad0d218)
+
 
 ## Contributing
 
