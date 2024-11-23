@@ -6,6 +6,8 @@ import shutil
 import platform
 import time
 import tkinter as tk
+import subprocess
+from bs4 import BeautifulSoup
 
 class FFmpegDownloader:
     def __init__(self, target_dir="ffmpeg_files", text_area=False, progress = False):
@@ -143,7 +145,92 @@ class FFmpegDownloader:
         """Aggiorna la barra di avanzamento."""
         if self.progress_bar:
             self.progress_bar["value"] = percent
+    
+    def get_latest_ffmpeg_version(self):
+        """Funzione per ottenere l'ultima versione stabile di FFmpeg dalla pagina di download ufficiale."""
+        url = "https://ffmpeg.org/download.html"  # Pagina di download di FFmpeg
+        
+        try:
+            # Usa urllib per ottenere la pagina HTML
+            response = urllib.request.urlopen(url)
+            html = response.read().decode('utf-8')
+            
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Trova la sezione che contiene il link di download per il codice sorgente
+            download_section = soup.find("div", class_="btn-download-wrapper")
+            
+            if download_section:
+                # Estrai il link che contiene il nome del file con la versione
+                download_link = download_section.find("a", href=True)
+                
+                if download_link:
+                    # Estrai la versione dal nome del file (ad esempio, 'ffmpeg-7.1.tar.xz')
+                    version = download_link["href"].split("-")[1].split(".tar")[0]  # Es. '7.1' da 'ffmpeg-7.1.tar.xz'
+                    return version
+            
+            #print("Errore: versione non trovata.")
+            return None
 
+        except urllib.error.URLError as e:
+            print(f"Errore durante il download della pagina: {e}")
+            return None
+
+    def get_installed_ffmpeg_version(self):
+        """Controlla la versione di FFmpeg installato nel sistema usando il percorso dell'eseguibile."""
+        ffmpeg_path = os.path.join(self.target_dir, self.ffmpeg_exe)
+        try:
+            # Esegui il comando per ottenere la versione di FFmpeg
+            result = subprocess.run(
+                [ffmpeg_path, "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Controlla se l'esecuzione è riuscita
+            if result.returncode == 0:
+                # Estrai la versione dalla prima riga dell'output
+                version_line = result.stdout.splitlines()[0]
+                version = version_line.split(" ")[2]  # La versione è nel formato "ffmpeg version x.y.z"
+                # Rimuove il suffisso aggiuntivo come "-essentials_build-www.gyan.dev"
+                version = version.split("-")[0]
+                return version
+            else:
+                print("Errore: FFmpeg non è stato trovato o il comando non è riuscito.")
+                return None
+        except FileNotFoundError:
+            #print("Errore: FFmpeg non trovato nel percorso specificato.")
+            return None
+        except Exception as e:
+            #print(f"Errore: {e}")
+            return None
+
+    def compare_versions(self, version1, version2):
+        """Confronta due versioni in formato x.y.z e restituisce -1, 0, 1 per maggiore, uguale, minore."""
+        version1_parts = [int(x) for x in version1.split('.')]
+        version2_parts = [int(x) for x in version2.split('.')]
+        return (version1_parts > version2_parts) - (version1_parts < version2_parts)
+    
+    def check_ffmpeg_versions(self):
+        """Funzione per eseguire il controllo delle versioni di FFmpeg e compararle."""
+        latest_version = self.get_latest_ffmpeg_version()
+        installed_version = self.get_installed_ffmpeg_version()
+
+        if latest_version and installed_version:
+            print(f"L'ultima versione disponibile di FFmpeg è: {latest_version}")
+            print(f"La versione installata di FFmpeg è: {installed_version}")
+            
+            # Confronta le versioni
+            comparison_result = self.compare_versions(installed_version, latest_version)
+            
+            if comparison_result < 0:
+                print("La tua versione di FFmpeg è obsoleta. Aggiorna alla versione più recente.")
+            elif comparison_result > 0:
+                print("La tua versione di FFmpeg è più recente della versione disponibile.")
+            else:
+                print("La tua versione di FFmpeg è aggiornata.")
+    
 if __name__ == "__main__":
     # Esegui il download e l'installazione di FFmpeg
     downloader = FFmpegDownloader(

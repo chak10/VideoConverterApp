@@ -1,17 +1,24 @@
 import os
 import subprocess
-from moduli.config_manager import ConfigManager
-from moduli.utils import Utils
-from moduli.ffmpeg import FFmpegDownloader
-import tkinter as tk
 import re
 import json
 import threading
 
+from moduli.config_manager import ConfigManager
+from moduli.utils import Utils
+from moduli.ffmpeg import FFmpegDownloader
+
+from moduli.icon import ICON_APP
+
+import tkinter as tk
+from tkinter import messagebox
 from time import perf_counter
-from datetime import datetime
 from datetime import timedelta
 from tkinter import filedialog, ttk
+import base64
+from io import BytesIO
+from PIL import Image, ImageTk
+
 
 # Definisci una palette di colori in stile Material Design
 PRIMARY_COLOR = "#1e3a8a"  # Blu
@@ -33,26 +40,71 @@ class VideoConverterApp:
             self.startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
         self.config = ConfigManager()
+        self.utls = Utils()
         self.root = tk.Tk()
-        self.root.title("Video Converter")
-        self.root.geometry("800x900")
+        self.root.title("Video Converter")        
+        """Imposta l'icona della finestra da una stringa Base64."""
+        # Decodifica la stringa Base64 e ottieni l'immagine
+        img = self.base64_to_image(ICON_APP)
+        icon = ImageTk.PhotoImage(img)
+
+        # Imposta l'icona della finestra
+        self.root.iconphoto(False, icon)
+        # Imposta la finestra principale
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        window_width = 800
+        window_height = 1000
+        position_top = int(screen_height / 2 - window_height / 2)
+        position_right = int(screen_width / 2 - window_width / 2)
+        self.root.geometry(
+            f"{window_width}x{window_height}+{position_right}+{position_top}"
+        )
+
         self.root.configure(bg=BACKGROUND_COLOR)
         self.quality_mode = tk.StringVar(value="crf")  # Default to CRF
+
         # Variabili di configurazione
-        self.ffmpeg_path = self.config.get(
-            "Paths", "ffmpeg_path", fallback="ffmpeg_files/ffmpeg.exe"
+        self.target_dir = self.config.get(
+            "Paths", "ffmpeg_dir", fallback="ffmpeg_files/"
         )
-        self.ffprobe_path = self.config.get(
-            "Paths", "ffprobe_path", fallback="ffmpeg_files/ffprobe.exe"
-        )
+        self.ffmpeg_exe = "ffmpeg.exe"
+        self.ffprobe_exe = "ffprobe.exe"
+        self.ffmpeg_path = os.path.join(self.target_dir, self.ffmpeg_exe)
+        self.ffprobe_path = os.path.join(self.target_dir, self.ffprobe_exe)
         self.input_folder = self.config.get("Paths", "input_folder", "")
         self.output_folder = self.config.get("Paths", "output_folder", "")
         self.crf_value = tk.IntVar(
             value=int(self.config.get("Settings", "crf_value", "25"))
-        )        
-        
-        # Inizializza i componenti dell'interfaccia
+        )
+        self.downloader = FFmpegDownloader(target_dir=self.target_dir)
         # Creazione del tema personalizzato
+        self.create_style()
+
+        # Creazione del notebook (container per le schede)
+        self.notebook = ttk.Notebook(self.root, style="TNotebook")
+        self.notebook.pack(fill="both", expand=True)
+
+        # Scheda 1: Conversione video
+        self.create_widgets()
+
+        # Scheda 2: Impostazioni
+        self.create_download_ffmpeg_tab()
+
+        # Verifica la presenza dei file ffmpeg
+        self.check_ffmpeg_files()
+
+        self.root.mainloop()
+    
+    def base64_to_image(self, base64_string):
+        """Converte una stringa Base64 in un'immagine."""
+        img_data = base64.b64decode(base64_string)
+        img = Image.open(BytesIO(img_data))
+        return img
+    
+
+    def create_style(self):
+        """Crea il tema personalizzato per il notebook."""
         style = ttk.Style()
         style.theme_use("default")  # Usa un tema base modificabile
         style.configure(
@@ -72,22 +124,25 @@ class VideoConverterApp:
             foreground=[("selected", TEXT_COLOR)],  # Colore testo tab attiva
         )
 
-        # Creazione del notebook (container per le schede)
-        self.notebook = ttk.Notebook(self.root, style="TNotebook")
-        self.notebook.pack(fill="both", expand=True)
-
-        # Scheda 1: Conversione video
-        self.create_widgets()
-
-        # Scheda 2: Impostazioni
-        self.create_download_ffmpeg_tab()
-        # Verifica la presenza dei file ffmpeg
-        if not os.path.isfile(self.ffmpeg_path) or not os.path.isfile(self.ffprobe_path):
+    def check_ffmpeg_files(self):
+        """Verifica se i file ffmpeg sono presenti e disabilita il tab di conversione se necessario."""
+        self.check_versions()
+        if not os.path.isfile(self.ffmpeg_path) or not os.path.isfile(
+            self.ffprobe_path
+        ):
             # Se i file non esistono, seleziona la scheda "Scarica FFmpeg"
-            self.notebook.select(self.notebook.tabs()[1]) 
-            self.notebook.tab(self.notebook.tabs()[0], state="disabled")  # Disabilita il tab "Conversione Video"
-
-        self.root.mainloop()
+            self.notebook.select(
+                self.notebook.tabs()[1]
+            )  # Seleziona la seconda scheda (indice 1)
+            self.notebook.tab(
+                self.notebook.tabs()[0], state="disabled"
+            )  # Disabilita il tab "Conversione Video"
+            messagebox.showerror(
+                "FFmpeg mancanti",
+                "FFmpeg non trovato. Per favore, scarica FFmpeg per continuare.",
+            )
+        
+            
 
     def create_widgets(self):
         # Frame per la selezione della cartella
@@ -189,7 +244,7 @@ class VideoConverterApp:
 
         # Creazione dei RadioButton (CRF e CQ)
         radio_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
-        radio_frame.pack(pady=10)
+        radio_frame.pack(pady=10, anchor="center")  # Centrato con margine verticale
 
         crf_radio = tk.Radiobutton(
             radio_frame,
@@ -198,10 +253,11 @@ class VideoConverterApp:
             value="crf",
             fg=TEXT_COLOR,
             bg=BACKGROUND_COLOR,
-            activeforeground=SECONDARY_COLOR,
+            activeforeground=SECONDARY_COLOR,  # Colore quando il RadioButton è attivo
+            selectcolor=PRIMARY_VARIANT_COLOR,  # Colore di selezione
             relief="flat",
         )
-        crf_radio.pack(side=tk.LEFT, padx=10)
+        crf_radio.pack(side=tk.LEFT, padx=20)
 
         cq_radio = tk.Radiobutton(
             radio_frame,
@@ -210,19 +266,22 @@ class VideoConverterApp:
             value="cq",
             fg=TEXT_COLOR,
             bg=BACKGROUND_COLOR,
-            activeforeground=SECONDARY_COLOR,
+            activeforeground=SECONDARY_COLOR,  # Colore quando il RadioButton è attivo
+            selectcolor=PRIMARY_VARIANT_COLOR,  # Colore di selezione
             relief="flat",
         )
         cq_radio.pack(side=tk.LEFT)
 
         # Frame per il CRF slider
         crf_slider_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
-        crf_slider_frame.pack(pady=10, fill="x", padx=20)
+        crf_slider_frame.pack(
+            pady=10, anchor="center"
+        )  # Centrato con margine verticale
 
         crf_slider_label = tk.Label(
             crf_slider_frame, text="Valore:", fg=TEXT_COLOR, bg=BACKGROUND_COLOR
         )
-        crf_slider_label.pack(side=tk.TOP, padx=(10, 0))
+        crf_slider_label.pack(pady=5)
 
         crf_slider = tk.Scale(
             crf_slider_frame,
@@ -234,12 +293,39 @@ class VideoConverterApp:
             fg=TEXT_COLOR,
             activebackground=PRIMARY_COLOR,
             troughcolor=PRIMARY_VARIANT_COLOR,
-            sliderlength=20,  # Aumenta la dimensione del cursore per il Material Design
+            sliderlength=20,  # Dimensione del cursore
             length=300,  # Larghezza dello slider
             tickinterval=5,
             highlightthickness=0,  # Rimuove il bordo di default
         )
-        crf_slider.pack(side=tk.TOP)
+        crf_slider.pack()
+
+        # Caselle di spunta
+        checkbox_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
+        checkbox_frame.pack(pady=10, fill="x", padx=20)
+
+        tk.Label(
+            checkbox_frame,
+            text="Opzioni di conversione:",
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+        ).pack(anchor="center", pady=5)
+
+        # Variabile per salvare i MediaInfo
+        self.save_mediainfo = tk.BooleanVar(value=False)
+
+        # Casella di spunta: Salva MediaInfo
+        mediainfo_checkbox = tk.Checkbutton(
+            checkbox_frame,
+            text="Salva MediaInfo",
+            variable=self.save_mediainfo,
+            onvalue=True,
+            offvalue=False,
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+            selectcolor=PRIMARY_COLOR,
+        )
+        mediainfo_checkbox.pack(anchor="center", pady=5)
 
         # Pulsante Avvia conversione
         start_button = tk.Button(
@@ -254,6 +340,7 @@ class VideoConverterApp:
             pady=10,
         )
         start_button.pack(pady=10)
+
         # Pulsante per fermare ffmpeg
         self.stop_button = tk.Button(
             conversion_tab,
@@ -271,21 +358,34 @@ class VideoConverterApp:
 
     def create_download_ffmpeg_tab(self):
         """Crea la scheda per il download di FFmpeg."""
-        download_tab = ttk.Frame(self.notebook, style="TNotebook.Tab")
+
+        download_tab = ttk.Frame(self.notebook, style="TNotebook")
         self.notebook.add(download_tab, text="Scarica FFmpeg")
-        
+
         # Stato e progress bar
-        self.status_label = tk.Label(
+        # Etichetta per la versione installata
+        self.installed_version_label = tk.Label(
             download_tab,
-            text="Devi scaricare FFMPEG",
+            text=f"Versione installata: {self.downloader.get_installed_ffmpeg_version()}",
             fg=TEXT_COLOR,
             bg=BACKGROUND_COLOR,
         )
-        self.status_label.pack(pady=10)
+        self.installed_version_label.pack(pady=5)
 
-        self.progress_bar_2 = ttk.Progressbar(download_tab, orient="horizontal", length=700, mode="determinate")
+        # Etichetta per l'ultima versione disponibile
+        self.latest_version_label = tk.Label(
+            download_tab,
+            text=f"Ultima versione disponibile: {self.downloader.get_latest_ffmpeg_version()}",
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+        )
+        self.latest_version_label.pack(pady=5)
+
+        self.progress_bar_2 = ttk.Progressbar(
+            download_tab, orient="horizontal", length=700, mode="determinate"
+        )
         self.progress_bar_2.pack(pady=20)
-        
+
         # Log Text Area per il download
         self.log_text_area_ffmpeg = tk.Text(
             download_tab,
@@ -299,6 +399,20 @@ class VideoConverterApp:
         )
         self.log_text_area_ffmpeg.pack(pady=10, padx=10, fill="both", expand=True)
 
+        # Pulsante Aggiorna
+        self.update_button = tk.Button(
+            download_tab,
+            text="Aggiorna",
+            command=self.update_ffmpeg,
+            bg=PRIMARY_COLOR,
+            fg=TEXT_COLOR,
+            activebackground=PRIMARY_VARIANT_COLOR,
+            relief="flat",
+            padx=20,
+            pady=10,
+        )
+        self.update_button.pack(pady=10)
+        
         # Pulsante per avviare il download
         download_button = tk.Button(
             download_tab,
@@ -312,17 +426,48 @@ class VideoConverterApp:
             pady=10,
         )
         download_button.pack(pady=10)
-        
+        self.downloader = FFmpegDownloader(
+            target_dir=self.target_dir,
+            text_area=self.log_text_area_ffmpeg,
+            progress=self.progress_bar_2,
+        )
+
+    def check_versions(self):
+        """Verifica se le versioni sono uguali e disabilita il pulsante Aggiorna."""
+        installed_version = self.downloader.get_installed_ffmpeg_version()
+        latest_version = self.downloader.get_latest_ffmpeg_version()
+        if installed_version == None:
+            self.update_button.config(
+                state=tk.DISABLED
+            )  
+        if installed_version and latest_version:
+            if installed_version == latest_version:
+                self.update_button.config(
+                    state=tk.DISABLED
+                )  # Disabilita il pulsante "Aggiorna" se le versioni coincidono
+            else:
+                self.update_button.config(
+                    state=tk.NORMAL
+                )  # Abilita il pulsante "Aggiorna" se le versioni sono diverse
+
     def download_ffmpeg(self):
         threading.Thread(target=self.download_ffmpeg_deamon, daemon=True).start()
         
-    def download_ffmpeg_deamon(self):
-        downloader = FFmpegDownloader(
-                target_dir="ffmpeg_files", text_area=self.log_text_area_ffmpeg, progress=self.progress_bar_2
-            )  # Imposta la cartella "ffmpeg_files"
-        if(downloader.download_ffmpeg()):
-            self.notebook.tab(self.notebook.tabs()[0], state="normal")
-            self.notebook.select(self.notebook.tabs()[0])
+    def update_ffmpeg(self):
+        if os.path.exists(self.ffmpeg_path):
+            os.remove(self.ffmpeg_path)
+        if os.path.exists(self.ffprobe_path):
+            os.remove(self.ffprobe_path)
+        threading.Thread(target=self.download_ffmpeg_deamon, args=(False,), daemon=True).start()
+    
+    def download_ffmpeg_deamon(self, redirect = True):
+        if self.downloader.download_ffmpeg():
+            if(redirect):
+                self.notebook.tab(self.notebook.tabs()[0], state="normal")
+                self.notebook.select(self.notebook.tabs()[0])
+            installed_version = self.downloader.get_installed_ffmpeg_version()    
+            self.installed_version_label.config(text=f"Versione installata: {installed_version}")
+            self.check_versions()
 
     def log_message(self, message):
         self.log_text_area.insert(tk.END, message + "\n")
@@ -341,121 +486,6 @@ class VideoConverterApp:
             self.output_label.config(text=folder_selected)
             self.output_folder = folder_selected
             self.config.update("Paths", "output_folder", folder_selected)
-
-    def get_mediainfo(self, video_path):
-        """Ottieni dettagli mediainfo (video e audio) del file utilizzando ffprobe."""
-        command = [
-            self.ffprobe_path,
-            "-v",
-            "error",  # Disabilita i log di errore
-            "-show_entries",
-            "format=filename,format_name,format_long_name,bit_rate,duration,streams",
-            "-show_entries",
-            "stream=codec_name,codec_type,width,height,bit_rate,channels,sample_rate,duration,frame_rate,frame_count,bit_depth",
-            "-of",
-            "json",  # Output in formato JSON
-            video_path,
-        ]
-
-        try:
-            # Esegui il comando e cattura l'output e gli errori
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-            )
-            stdout, stderr = process.communicate()
-
-            # Verifica se il comando è stato eseguito correttamente
-            if process.returncode != 0:
-                self.log_message(
-                    f"Errore ottenendo mediainfo per {video_path}: {stderr}"
-                )
-                return {}
-
-            # Decodifica l'output JSON
-            try:
-                info = json.loads(stdout)
-            except json.JSONDecodeError:
-                self.log_message(f"Errore di decodifica JSON per {video_path}")
-                return {}
-
-            # Estrai informazioni generali e sui flussi
-            media_info = {"media": {"@ref": video_path, "track": []}}
-
-            # Aggiungi informazioni generali sul formato
-            format_info = info.get("format", {})
-            general_info = {
-                "@type": "General",
-                "VideoCount": len(
-                    [
-                        stream
-                        for stream in info["streams"]
-                        if stream["codec_type"] == "video"
-                    ]
-                ),
-                "AudioCount": len(
-                    [
-                        stream
-                        for stream in info["streams"]
-                        if stream["codec_type"] == "audio"
-                    ]
-                ),
-                "FileExtension": video_path.split(".")[-1],
-                "Format": format_info.get("format_name", "N/A"),
-                "Duration": format_info.get("duration", "N/A"),
-                "FileSize": format_info.get("bit_rate", "N/A"),
-                "OverallBitRate": format_info.get("bit_rate", "N/A"),
-                "Recorded_Date": datetime.now().year,
-                "File_Created_Date": datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S.%f UTC"
-                ),
-                "File_Modified_Date": datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S.%f UTC"
-                ),
-            }
-
-            media_info["media"]["track"].append(general_info)
-
-            # Aggiungi informazioni sui flussi video e audio
-            for stream in info["streams"]:
-                stream_info = {
-                    "@type": stream.get("codec_type", "N/A").capitalize(),
-                    "StreamOrder": str(stream.get("index", "N/A")),
-                    "ID": str(stream.get("index", "N/A")),
-                    "Format": stream.get("codec_name", "N/A"),
-                    "Duration": stream.get("duration", "N/A"),
-                    "BitRate": stream.get("bit_rate", "N/A"),
-                }
-
-                if stream["codec_type"] == "video":
-                    stream_info.update(
-                        {
-                            "Width": stream.get("width", "N/A"),
-                            "Height": stream.get("height", "N/A"),
-                            "FrameRate": stream.get("r_frame_rate", "N/A"),
-                            "FrameCount": stream.get("nb_frames", "N/A"),
-                            "BitDepth": stream.get("bit_depth", "8"),
-                        }
-                    )
-                elif stream["codec_type"] == "audio":
-                    stream_info.update(
-                        {
-                            "Channels": stream.get("channels", "N/A"),
-                            "SamplingRate": stream.get("sample_rate", "N/A"),
-                        }
-                    )
-
-                media_info["media"]["track"].append(stream_info)
-
-            return media_info
-
-        except subprocess.SubprocessError as e:
-            # Cattura eventuali errori del subprocess
-            self.log_message(f"Errore eseguendo ffprobe per {video_path}: {str(e)}")
-            return {}
 
     def get_video_info(self, input_path):
         command = [self.ffmpeg_path, "-i", input_path]
@@ -528,7 +558,8 @@ class VideoConverterApp:
             quality_value = (
                 self.crf_value.get()
             )  # Use the same slider value for CQ for simplicity
-        mediainfo_before = self.get_mediainfo(input_path)
+        if self.save_mediainfo.get():
+            mediainfo_before = self.utls.get_mediainfo(input_path)
         command = [
             self.ffmpeg_path,
             "-y",
@@ -574,8 +605,8 @@ class VideoConverterApp:
             for line in process.stderr:
                 time_match = re.search(r"time=(\d+:\d+:\d+\.\d+)", line)
                 if time_match:
-                    utls = Utils()
-                    current_time = utls.parse_time_to_seconds(time_match.group(1))
+
+                    current_time = self.utls.parse_time_to_seconds(time_match.group(1))
                     progress = (current_time / duration) * 100
                     self.progress_bar["value"] = progress
                     remaining_time = max(duration - current_time, 0)
@@ -591,20 +622,21 @@ class VideoConverterApp:
             self.log_message(
                 f"Conversione completata in {timedelta(seconds=int(elapsed_time))}"
             )
-            mediainfo_after = self.get_mediainfo(output_path)
-            # Save both mediainfo data to a JSON file
-            report = {
-                "input_file": input_path,
-                "output_file": output_path,
-                "mediainfo_before": mediainfo_before,
-                "mediainfo_after": mediainfo_after,
-            }
-            json_report_path = os.path.splitext(output_path)[0] + "_mediainfo.json"
-            with open(json_report_path, "w") as json_file:
-                json.dump(report, json_file, indent=4)
+            if self.save_mediainfo.get():
+                mediainfo_after = self.utls.get_mediainfo(output_path)
+                # Save both mediainfo data to a JSON file
+                report = {
+                    "input_file": input_path,
+                    "output_file": output_path,
+                    "mediainfo_before": mediainfo_before,
+                    "mediainfo_after": mediainfo_after,
+                }
+                json_report_path = os.path.splitext(output_path)[0] + "_mediainfo.json"
+                with open(json_report_path, "w") as json_file:
+                    json.dump(report, json_file, indent=4)
 
-            # Log the completion message with JSON report path
-            self.log_message(f"Rapporto mediainfo salvato in: {json_report_path}")
+                # Log the completion message with JSON report path
+                self.log_message(f"Rapporto mediainfo salvato in: {json_report_path}")
 
         except Exception as e:
             self.log_message(f"Errore durante la conversione di {input_path}: {str(e)}")

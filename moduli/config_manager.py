@@ -14,8 +14,7 @@ class ConfigManager:
     def load_config(self):
         if not os.path.isfile(self.config_file):
             self.config["Paths"] = {
-                "ffmpeg_path": "ffmpeg_files/ffmpeg.exe",
-                "ffprobe_path": "ffmpeg_files/ffprobe.exe",
+                "ffmpeg_dir": "ffmpeg_files/",
                 "input_folder": "",
                 "output_folder": "",
             }
