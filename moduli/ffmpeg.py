@@ -8,6 +8,8 @@ import time
 import tkinter as tk
 import subprocess
 from bs4 import BeautifulSoup
+from moduli.utils import Logger
+
 
 class FFmpegDownloader:
     def __init__(self, target_dir="ffmpeg_files", text_area=False, progress = False):
@@ -52,11 +54,11 @@ class FFmpegDownloader:
                             self.progress2(percent)
                             #self.log_message(f"Download: {percent:.2f}%")
             except Exception as e:
-                self.log_message(f"Errore durante il download: {str(e)}")
+                self.log_message(f"Errore durante il download: {str(e)}", level='error')
             self.log_message(f"Download completato in {time.time() - start_time:.2f} secondi.")
             return temp_filepath
         except Exception as e:
-            self.log_message(f"Errore durante il download: {e}")
+            self.log_message(f"Errore durante il download: {e}", level='error')
             return ""
 
     def _extract_zip(self, zip_path: str) -> str:
@@ -67,7 +69,7 @@ class FFmpegDownloader:
                 zip_ref.extractall(temp_dir)
             return temp_dir
         except Exception as e:
-            self.log_message(f"Errore durante l'estrazione: {e}")
+            self.log_message(f"Errore durante l'estrazione: {e}", level='error')
             return ""
 
     def _move_files(self, temp_dir: str) -> bool:
@@ -88,7 +90,7 @@ class FFmpegDownloader:
                     file_found = True
                     break  # Uscire dal ciclo appena trovato il file
             if not file_found:
-                self.log_message(f"Errore: {file_name} non trovato.")
+                self.log_message(f"Errore: {file_name} non trovato.", level='error')
                 moved = False  # Se almeno uno dei file non è stato trovato, setta il flag a False
 
         return moved
@@ -96,33 +98,33 @@ class FFmpegDownloader:
     def download_ffmpeg(self):
         """Funzione principale per scaricare e installare FFmpeg."""
         if platform.system() != "Windows":
-            self.log_message("Questo script è compatibile solo con Windows.")
+            self.log_message("Questo script è compatibile solo con Windows.", level='warning')
             return False
 
         # Controlla se i file sono già presenti nella cartella di destinazione
         if self._is_installed():
             self.log_message(
-                "I file ffmpeg.exe e ffprobe.exe sono già presenti nella cartella di destinazione."
+                "I file ffmpeg.exe e ffprobe.exe sono già presenti nella cartella di destinazione.", level='warning'
             )
             return False
 
         # Scarica il file ZIP di ffmpeg
         zip_path = self._download_zip()
         if not zip_path:
-            self.log_message("Errore nel download del file ZIP. Aborting...")
+            self.log_message("Errore nel download del file ZIP. Aborting...", level='error')
             return False
 
         # Estrai il contenuto del file ZIP
         temp_dir = self._extract_zip(zip_path)
         if not temp_dir:
-            self.log_message("Errore nell'estrazione del file ZIP. Aborting...")
+            self.log_message("Errore nell'estrazione del file ZIP. Aborting...", level='error')
             return False
 
         # Sposta i file ffmpeg.exe e ffprobe.exe nella cartella di destinazione
         if self._move_files(temp_dir):
             self.log_message(f"File spostati correttamente: {self.ffmpeg_exe}, {self.ffprobe_exe}")            
         else:
-            self.log_message("Errore: uno o entrambi i file non sono stati trovati nel pacchetto.")
+            self.log_message("Errore: uno o entrambi i file non sono stati trovati nel pacchetto.", level='error')
             return False
 
         # Verifica che i file siano stati spostati correttamente
@@ -133,11 +135,10 @@ class FFmpegDownloader:
         shutil.rmtree(temp_dir, ignore_errors=True)
         return True
 
-    def log_message(self, message):
-        """Log dei messaggi (da aggiungere nel conversion tab)."""
+    def log_message(self, message, level='info'):
         if self.text_area:
-            self.text_area.insert(tk.END, message + "\n")
-            self.text_area.see(tk.END)
+            ffmpeg_txt = Logger(self.text_area)
+            return ffmpeg_txt.log(message, level)
         else:
             print(message)
     

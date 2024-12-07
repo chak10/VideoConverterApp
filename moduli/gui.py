@@ -6,19 +6,20 @@ import threading
 
 from moduli.config_manager import ConfigManager
 from moduli.utils import Utils
+from moduli.utils import Logger
 from moduli.ffmpeg import FFmpegDownloader
-
 from moduli.icon import ICON_APP
 
 import tkinter as tk
 from tkinter import messagebox
 from time import perf_counter
+from datetime import datetime
 from datetime import timedelta
 from tkinter import filedialog, ttk
 import base64
 from io import BytesIO
 from PIL import Image, ImageTk
-
+from send2trash import send2trash
 
 # Definisci una palette di colori in stile Material Design
 PRIMARY_COLOR = "#1e3a8a"  # Blu
@@ -40,9 +41,9 @@ class VideoConverterApp:
             self.startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
         self.config = ConfigManager()
-        self.utls = Utils()
+
         self.root = tk.Tk()
-        self.root.title("Video Converter")        
+        self.root.title("Video Converter")
         """Imposta l'icona della finestra da una stringa Base64."""
         # Decodifica la stringa Base64 e ottieni l'immagine
         img = self.base64_to_image(ICON_APP)
@@ -53,8 +54,8 @@ class VideoConverterApp:
         # Imposta la finestra principale
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        window_width = 800
-        window_height = 1000
+        window_width = 1200
+        window_height = 900
         position_top = int(screen_height / 2 - window_height / 2)
         position_right = int(screen_width / 2 - window_width / 2)
         self.root.geometry(
@@ -77,6 +78,9 @@ class VideoConverterApp:
         self.crf_value = tk.IntVar(
             value=int(self.config.get("Settings", "crf_value", "25"))
         )
+        self.ffmpeg_process = False
+        self.time_files = []
+        self.utls = Utils(ffprobe_path=self.ffprobe_path)
         self.downloader = FFmpegDownloader(target_dir=self.target_dir)
         # Creazione del tema personalizzato
         self.create_style()
@@ -89,19 +93,21 @@ class VideoConverterApp:
         self.create_widgets()
 
         # Scheda 2: Impostazioni
+        self.create_setting()
+
+        # Scheda 3: Impostazioni
         self.create_download_ffmpeg_tab()
 
         # Verifica la presenza dei file ffmpeg
         self.check_ffmpeg_files()
 
         self.root.mainloop()
-    
+
     def base64_to_image(self, base64_string):
         """Converte una stringa Base64 in un'immagine."""
         img_data = base64.b64decode(base64_string)
         img = Image.open(BytesIO(img_data))
         return img
-    
 
     def create_style(self):
         """Crea il tema personalizzato per il notebook."""
@@ -123,6 +129,13 @@ class VideoConverterApp:
             background=[("selected", PRIMARY_COLOR)],  # Colore tab attiva
             foreground=[("selected", TEXT_COLOR)],  # Colore testo tab attiva
         )
+        style.configure(
+            "TCombobox",
+            fieldbackground=BACKGROUND_COLOR,
+            background=BACKGROUND_COLOR,
+            foreground=TEXT_COLOR,
+            selectbackground=PRIMARY_VARIANT_COLOR,
+        )
 
     def check_ffmpeg_files(self):
         """Verifica se i file ffmpeg sono presenti e disabilita il tab di conversione se necessario."""
@@ -141,8 +154,6 @@ class VideoConverterApp:
                 "FFmpeg mancanti",
                 "FFmpeg non trovato. Per favore, scarica FFmpeg per continuare.",
             )
-        
-            
 
     def create_widgets(self):
         # Frame per la selezione della cartella
@@ -205,6 +216,8 @@ class VideoConverterApp:
         )
         self.log_text_area.pack(pady=10, padx=10, fill="both", expand=True)
 
+        self.conversion_txt = Logger(self.log_text_area)
+
         # Frame per la selezione della cartella di output
         output_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
         output_frame.pack(pady=10, fill="x", padx=20)
@@ -231,8 +244,43 @@ class VideoConverterApp:
         )
         select_output_button.pack(side=tk.RIGHT)
 
+        # Pulsante Avvia conversione
+        self.start_button = tk.Button(
+            conversion_tab,
+            text="Avvia conversione",
+            command=self.start_conversion,
+            bg=PRIMARY_COLOR,
+            fg=TEXT_COLOR,
+            activebackground=PRIMARY_VARIANT_COLOR,
+            relief="flat",
+            padx=20,
+            pady=10,
+        )
+        self.start_button.pack(pady=10)
+
+        # Pulsante per fermare ffmpeg
+        self.stop_button = tk.Button(
+            conversion_tab,
+            text="Ferma conversione",
+            command=self.stop_ffmpeg,
+            bg=PRIMARY_COLOR,
+            fg=TEXT_COLOR,
+            activebackground=PRIMARY_VARIANT_COLOR,
+            relief="flat",
+            padx=20,
+            pady=10,
+            state=tk.DISABLED,
+        )
+        self.stop_button.pack(pady=20)
+
+    def create_setting(self):
+        """Crea la scheda per il download di FFmpeg."""
+
+        setting_tab = ttk.Frame(self.notebook, style="TNotebook")
+        self.notebook.add(setting_tab, text="Impostazioni")
+
         # Selezione della modalità qualità (CRF o CQ) con il relativo slider
-        quality_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
+        quality_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
         quality_frame.pack(pady=10, fill="x", padx=20)
 
         tk.Label(
@@ -243,7 +291,7 @@ class VideoConverterApp:
         ).pack(side=tk.TOP)
 
         # Creazione dei RadioButton (CRF e CQ)
-        radio_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
+        radio_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
         radio_frame.pack(pady=10, anchor="center")  # Centrato con margine verticale
 
         crf_radio = tk.Radiobutton(
@@ -273,7 +321,7 @@ class VideoConverterApp:
         cq_radio.pack(side=tk.LEFT)
 
         # Frame per il CRF slider
-        crf_slider_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
+        crf_slider_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
         crf_slider_frame.pack(
             pady=10, anchor="center"
         )  # Centrato con margine verticale
@@ -300,9 +348,45 @@ class VideoConverterApp:
         )
         crf_slider.pack()
 
-        # Caselle di spunta
-        checkbox_frame = tk.Frame(conversion_tab, bg=BACKGROUND_COLOR)
-        checkbox_frame.pack(pady=10, fill="x", padx=20)
+        # Aggiungi l'etichetta prima del codec
+        codec_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
+        codec_frame.pack(pady=10, anchor="center")  # Centra il frame
+
+        # Etichetta per il codec
+        tk.Label(
+            codec_frame,
+            text="Seleziona Codec:",
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+        ).pack(
+            anchor="w", pady=5
+        )  # Etichetta allineata a sinistra
+
+        # Menu a discesa per la selezione del codec
+        self.codec = tk.StringVar(value="h264_nvenc")
+        codec_menu = ttk.Combobox(
+            codec_frame,
+            textvariable=self.codec,
+            values=[
+                "libx264",  # Codifica video con H.264 (x264)
+                "libx265",  # Codifica video con HEVC (H.265)
+                "h264_nvenc",  # Codifica video H.264 usando GPU NVIDIA (accelerazione hardware)
+                "hevc_nvenc",  # Codifica video HEVC (H.265) usando GPU NVIDIA (accelerazione hardware)
+                "vp8",  # Codifica video con VP8
+                "vp9",  # Codifica video con VP9
+                "mpeg4",  # Codifica video con MPEG-4
+                "libaom-av1",  # Codifica video con AV1
+            ],
+            state="normal",  # Permette la selezione
+            width=20,  # Imposta la larghezza del menu a discesa
+            background=BACKGROUND_COLOR,
+            foreground=TEXT_COLOR,
+        )
+        codec_menu.pack(pady=5)
+
+        # Caselle di spunta affiancate
+        checkbox_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
+        checkbox_frame.pack(pady=30, padx=20, anchor="center")
 
         tk.Label(
             checkbox_frame,
@@ -313,7 +397,6 @@ class VideoConverterApp:
 
         # Variabile per salvare i MediaInfo
         self.save_mediainfo = tk.BooleanVar(value=False)
-
         # Casella di spunta: Salva MediaInfo
         mediainfo_checkbox = tk.Checkbutton(
             checkbox_frame,
@@ -325,36 +408,78 @@ class VideoConverterApp:
             bg=BACKGROUND_COLOR,
             selectcolor=PRIMARY_COLOR,
         )
-        mediainfo_checkbox.pack(anchor="center", pady=5)
+        mediainfo_checkbox.pack(side="left", padx=10)
 
-        # Pulsante Avvia conversione
-        start_button = tk.Button(
-            conversion_tab,
-            text="Avvia conversione",
-            command=self.start_conversion,
-            bg=PRIMARY_COLOR,
-            fg=TEXT_COLOR,
-            activebackground=PRIMARY_VARIANT_COLOR,
-            relief="flat",
-            padx=20,
-            pady=10,
-        )
-        start_button.pack(pady=10)
+        # Variabile per sovrascrivere
+        self.save_overwrte = tk.BooleanVar(value=True)
 
-        # Pulsante per fermare ffmpeg
-        self.stop_button = tk.Button(
-            conversion_tab,
-            text="Ferma FFMPEG",
-            command=self.stop_ffmpeg,
-            bg=PRIMARY_COLOR,
+        # Casella di spunta: Sovrascrivi originale
+        overwrte_checkbox = tk.Checkbutton(
+            checkbox_frame,
+            text="Sovrascrivi originale",
+            variable=self.save_overwrte,
+            onvalue=True,
+            offvalue=False,
             fg=TEXT_COLOR,
-            activebackground=PRIMARY_VARIANT_COLOR,
-            relief="flat",
-            padx=20,
-            pady=10,
-            state=tk.DISABLED,
+            bg=BACKGROUND_COLOR,
+            selectcolor=PRIMARY_COLOR,
         )
-        self.stop_button.pack(pady=20)
+        overwrte_checkbox.pack(side="left", padx=10)
+
+        # Variabile per Grandezza
+        self.if_big_del = tk.BooleanVar(value=True)
+
+        # Casella di spunta: Se più grande elimina
+        if_big_del_checkbox = tk.Checkbutton(
+            checkbox_frame,
+            text="Se più grande elimina",
+            variable=self.if_big_del,
+            onvalue=True,
+            offvalue=False,
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+            selectcolor=PRIMARY_COLOR,
+        )
+        if_big_del_checkbox.pack(side="left", padx=10)
+
+        # Input box per il bitrate soglia
+        bitrate_frame = tk.Frame(setting_tab, bg=BACKGROUND_COLOR)
+        bitrate_frame.pack(pady=20, fill="x", padx=20)
+
+        tk.Label(
+            bitrate_frame,
+            text="Bitrate Soglia (kbps) per la scansione:",
+            fg=TEXT_COLOR,
+            bg=BACKGROUND_COLOR,
+        ).pack(side=tk.TOP, anchor="center", padx=5)
+
+        self.bitrate_max = tk.IntVar(value=2500)  # Default: 2500 kbps
+
+        def validate_bitrate(new_value):
+            if new_value.isdigit():  # Controlla che sia un numero
+                value = int(new_value)
+                return 100 <= value <= 100000  # Ritorna True se è nel range
+            return False  # Altrimenti False
+
+        # Configura la validazione del bitrate
+        vcmd = bitrate_frame.register(
+            validate_bitrate
+        )  # Registra la funzione di validazione
+
+        bitrate_input = tk.Spinbox(
+            bitrate_frame,
+            from_=0,
+            to=100000,  # Range personalizzabile
+            increment=100,
+            textvariable=self.bitrate_max,
+            width=10,
+            fg=TEXT_COLOR,
+            bg=PRIMARY_VARIANT_COLOR,
+            highlightthickness=0,
+            validate="key",  # Abilita la validazione durante la digitazione
+            validatecommand=(vcmd, "%P"),  # Passa il nuovo valore come argomento
+        )
+        bitrate_input.pack(anchor="center", padx=10)
 
     def create_download_ffmpeg_tab(self):
         """Crea la scheda per il download di FFmpeg."""
@@ -412,7 +537,7 @@ class VideoConverterApp:
             pady=10,
         )
         self.update_button.pack(pady=10)
-        
+
         # Pulsante per avviare il download
         download_button = tk.Button(
             download_tab,
@@ -437,9 +562,7 @@ class VideoConverterApp:
         installed_version = self.downloader.get_installed_ffmpeg_version()
         latest_version = self.downloader.get_latest_ffmpeg_version()
         if installed_version == None:
-            self.update_button.config(
-                state=tk.DISABLED
-            )  
+            self.update_button.config(state=tk.DISABLED)
         if installed_version and latest_version:
             if installed_version == latest_version:
                 self.update_button.config(
@@ -452,26 +575,26 @@ class VideoConverterApp:
 
     def download_ffmpeg(self):
         threading.Thread(target=self.download_ffmpeg_deamon, daemon=True).start()
-        
+
     def update_ffmpeg(self):
         if os.path.exists(self.ffmpeg_path):
             os.remove(self.ffmpeg_path)
         if os.path.exists(self.ffprobe_path):
             os.remove(self.ffprobe_path)
-        threading.Thread(target=self.download_ffmpeg_deamon, args=(False,), daemon=True).start()
-    
-    def download_ffmpeg_deamon(self, redirect = True):
+        threading.Thread(
+            target=self.download_ffmpeg_deamon, args=(False,), daemon=True
+        ).start()
+
+    def download_ffmpeg_deamon(self, redirect=True):
         if self.downloader.download_ffmpeg():
-            if(redirect):
+            if redirect:
                 self.notebook.tab(self.notebook.tabs()[0], state="normal")
                 self.notebook.select(self.notebook.tabs()[0])
-            installed_version = self.downloader.get_installed_ffmpeg_version()    
-            self.installed_version_label.config(text=f"Versione installata: {installed_version}")
+            installed_version = self.downloader.get_installed_ffmpeg_version()
+            self.installed_version_label.config(
+                text=f"Versione installata: {installed_version}"
+            )
             self.check_versions()
-
-    def log_message(self, message):
-        self.log_text_area.insert(tk.END, message + "\n")
-        self.log_text_area.see(tk.END)
 
     def select_folder(self):
         folder_selected = filedialog.askdirectory()
@@ -506,12 +629,15 @@ class VideoConverterApp:
                 width = int(width_str.strip())
                 height = int(height_str.strip())
             except ValueError:
-                self.log_message(
-                    f"Errore nel parsing della risoluzione del video: {width_str}x{height_str}"
+                self.conversion_txt.log(
+                    f"Errore nel parsing della risoluzione del video: {width_str}x{height_str}",
+                    level="error",
                 )
                 return None, None, None
         else:
-            self.log_message("Risoluzione del video non trovata.")
+            self.conversion_txt.log(
+                "Risoluzione del video non trovata.", level="warning"
+            )
             return None, None, None
 
         # Trova la durata del video
@@ -529,37 +655,48 @@ class VideoConverterApp:
         if self.ffmpeg_process:
             self.ffmpeg_process.terminate()  # Invia il comando per terminare il processo
             self.ffmpeg_process = None  # Reset del processo
-            self.log_message("Ffmpeg fermato.")
-
-            # Disabilita il pulsante di stop
+            self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
 
-    def convert_video(self, input_path, output_path, file_index, total_files):
+    def run_ffmpeg_command(self, command):
+        try:
+            process = subprocess.Popen(
+                command,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=self.creationflags,
+                startupinfo=self.startupinfo,
+                encoding="utf-8",
+            )
+            return process
+        except Exception as e:
+            self.logger.log(
+                f"Errore durante l'esecuzione del comando FFmpeg: {e}", level="error"
+            )
+            return None
+
+    def convert_video(self, input_path, output_path):
         width, height, duration = self.get_video_info(input_path)
         if duration is None or width is None or height is None:
-            self.log_message(
-                f"Impossibile ottenere informazioni video per {input_path}."
+            self.conversion_txt.log(
+                f"Impossibile ottenere informazioni video per {input_path}.",
+                level="error",
             )
             return
 
-        # Scale filter for resolution
         scale_filter = (
             "scale=1280:720,format=yuv420p"
             if (width > 1280 or height > 720)
             else "scale=-1:-1,format=yuv420p"
         )
 
-        # Set command based on selected quality mode
-        if self.quality_mode.get() == "crf":
-            quality_option = "-crf"
-            quality_value = self.crf_value.get()  # Get the value from the slider
-        else:
-            quality_option = "-cq"
-            quality_value = (
-                self.crf_value.get()
-            )  # Use the same slider value for CQ for simplicity
-        if self.save_mediainfo.get():
-            mediainfo_before = self.utls.get_mediainfo(input_path)
+        quality_option = "-crf" if self.quality_mode.get() == "crf" else "-cq"
+        quality_value = self.crf_value.get()
+
+        mediainfo_before = (
+            self.utls.get_mediainfo(input_path) if self.save_mediainfo.get() else {}
+        )
+
         command = [
             self.ffmpeg_path,
             "-y",
@@ -570,7 +707,7 @@ class VideoConverterApp:
             "-vf",
             scale_filter,
             "-c:v",
-            "h264_nvenc",
+            self.codec.get(),
             quality_option,
             str(quality_value),
             "-preset",
@@ -583,63 +720,59 @@ class VideoConverterApp:
             "128k",
             output_path,
         ]
-        self.log_message(
-            f"Parametri impostati: {quality_option.upper()}={quality_value},{scale_filter}"
-        )
-        start_time = perf_counter()
-        process = subprocess.Popen(
-            command,
-            stderr=subprocess.PIPE,
-            text=True,
-            creationflags=self.creationflags,
-            startupinfo=self.startupinfo,
-            encoding="utf-8",
-        )
+
+        try:
+            process = self.run_ffmpeg_command(command)
+        except FileNotFoundError:
+            self.logger.log(
+                "FFmpeg non trovato. Assicurati che sia installato correttamente.",
+                level="error",
+            )
+        except RuntimeError as e:
+            self.logger.log(str(e), level="error")
+        except Exception as e:
+            self.logger.log(f"Errore inaspettato: {e}", level="error")
+
         self.ffmpeg_process = process
-        # Abilita il pulsante di stop
+
+        self.conversion_txt.log(
+            f"Conversione di {os.path.basename(input_path)} avviata"
+        )
+
+        self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         try:
-            self.file_label.config(text=f"Converting: {os.path.basename(input_path)}")
-            self.status_label.config(text=f"Conversione {file_index}/{total_files}: 0%")
-
+            self.file_label.config(text=f"{os.path.basename(input_path)}: 0%")
             for line in process.stderr:
-                time_match = re.search(r"time=(\d+:\d+:\d+\.\d+)", line)
+                time_match = re.search(r"time=(\d+:\d+:\d+(?:\.\d+)?)", line)
+                # Estrazione della velocità
+                speed_match = re.search(r"speed=(\d+\.?\d*)x", line)
                 if time_match:
-
                     current_time = self.utls.parse_time_to_seconds(time_match.group(1))
                     progress = (current_time / duration) * 100
                     self.progress_bar["value"] = progress
-                    remaining_time = max(duration - current_time, 0)
-                    estimated_time = str(timedelta(seconds=int(remaining_time)))
-                    self.status_label.config(
-                        text=f"Conversione {file_index}/{total_files}: {int(progress)}% - Rimanente: {estimated_time}"
+                    remaining_time_current_file = max(duration - current_time, 0)
+                if speed_match and time_match:
+                    estimated_speed = float(speed_match.group(1))
+                    remaining_time_current_file = (
+                        duration - current_time
+                    ) / estimated_speed
+                    self.file_label.config(
+                        text=f"{os.path.basename(input_path)}: {int(progress)}% - Rimanente: {self.convert_seconds(remaining_time_current_file)}"
                     )
-                    self.status_label.update_idletasks()
+                self.file_label.update_idletasks()
 
             process.wait()
-            end_time = perf_counter()
-            elapsed_time = end_time - start_time
-            self.log_message(
-                f"Conversione completata in {timedelta(seconds=int(elapsed_time))}"
-            )
-            if self.save_mediainfo.get():
-                mediainfo_after = self.utls.get_mediainfo(output_path)
-                # Save both mediainfo data to a JSON file
-                report = {
-                    "input_file": input_path,
-                    "output_file": output_path,
-                    "mediainfo_before": mediainfo_before,
-                    "mediainfo_after": mediainfo_after,
-                }
-                json_report_path = os.path.splitext(output_path)[0] + "_mediainfo.json"
-                with open(json_report_path, "w") as json_file:
-                    json.dump(report, json_file, indent=4)
 
-                # Log the completion message with JSON report path
-                self.log_message(f"Rapporto mediainfo salvato in: {json_report_path}")
+            # Azioni post-processo
+            if self.ffmpeg_process:
+                self._post_process_conversion(input_path, output_path, mediainfo_before)
 
         except Exception as e:
-            self.log_message(f"Errore durante la conversione di {input_path}: {str(e)}")
+            self.conversion_txt.log(
+                f"Errore durante la conversione di {input_path}: {str(e)}",
+                level="error",
+            )
         finally:
             if process.poll() is None:  # Controlla se il processo è ancora attivo
                 process.terminate()  # Tenta di chiuderlo in modo pulito
@@ -647,7 +780,77 @@ class VideoConverterApp:
                     process.wait(timeout=5)  # Attendi la chiusura
                 except subprocess.TimeoutExpired:
                     process.kill()  # Forza la chiusura
-                self.log_message("Processo FFmpeg terminato.")
+                self.conversion_txt.log("Processo FFmpeg terminato.")
+
+    def _post_process_conversion(self, input_path, output_path, mediainfo_before):
+        if self.save_mediainfo.get():
+            mediainfo_after = self.utls.get_mediainfo(output_path)
+            # Save both mediainfo data to a JSON file
+            report = {
+                "input_file": input_path,
+                "output_file": output_path,
+                "mediainfo_before": mediainfo_before,
+                "mediainfo_after": mediainfo_after,
+            }
+            json_report_path = os.path.splitext(output_path)[0] + "_mediainfo.json"
+            with open(json_report_path, "w") as json_file:
+                json.dump(report, json_file, indent=4)
+
+            # Log the completion message with JSON report path
+            self.conversion_txt.log(
+                f"Rapporto mediainfo salvato in: {json_report_path}"
+            )
+
+        if self.if_big_del.get():
+            try:
+                # Confronta le dimensioni e rimuovi il file più grande
+                if os.path.getsize(output_path) >= os.path.getsize(input_path):
+                    os.remove(output_path)
+                    self.conversion_txt.log(
+                        f"Il file '{output_path}' è stato eliminato perché è più grande."
+                    )
+            except FileNotFoundError as e:
+                self.conversion_txt.log(f"Errore: {e}", level="error")
+            except Exception as e:
+                self.conversion_txt.log(
+                    f"Si è verificato un errore: {e}", level="error"
+                )
+
+        if self.save_overwrte.get() and os.path.exists(output_path):
+            try:
+                send2trash(os.path.normpath(input_path))
+                self.conversion_txt.log(
+                    f"Il file originale è stato spostato nel cestino."
+                )
+            except FileNotFoundError:
+                self.conversion_txt.log(
+                    f"Il file '{input_path}' non esiste.", level="error"
+                )
+            except Exception as e:
+                self.conversion_txt.log(
+                    f"Errore durante lo spostamento del file nel cestino: {e}",
+                    level="error",
+                )
+            try:
+                os.rename(output_path, input_path)
+            except FileNotFoundError:
+                self.conversion_txt.log(
+                    f"Il file '{output_path}' non esiste.", level="error"
+                )
+            except PermissionError:
+                self.conversion_txt.log(
+                    "Permessi insufficienti per rinominare il file.", level="error"
+                )
+            except Exception as e:
+                self.conversion_txt.log(
+                    f"Errore durante la rinomina del file: {e}", level="error"
+                )
+
+    def convert_seconds(self, seconds):
+        t = timedelta(seconds=seconds)
+        hours, remainder = divmod(t.total_seconds(), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
 
     def batch_convert(self):
         allowed_extensions = (
@@ -663,7 +866,6 @@ class VideoConverterApp:
             ".mpg",
             ".mpeg4",
             ".mts",
-            ".mxg",
             ".ogv",
             ".ts",
             ".vob",
@@ -674,64 +876,83 @@ class VideoConverterApp:
             ".m4v",
             ".rm",
             ".rmvb",
-            ".svq3",
-            ".dvd",
             ".mxf",
-            ".f4v",
             ".amv",
-            ".roq",
-            ".yuv",
-            ".cine",
-            ".bik",
-            ".cpk",
-            ".vdr",
-            ".iso",
-            ".iso9660",
-            ".nsv",
-            ".m2v",
-            ".mp2",
-            ".mpv",
-            ".mod",
-            ".tod",
-            ".pmp",
-            ".ivf",
-            ".drc",
-            ".bmv",
-            ".svi",
-            ".flv",
-            ".vp8",
         )
+        self.ffmpeg_process = False
         if not self.input_folder:
-            self.log_message("Seleziona una cartella valida.")
+            self.conversion_txt.log("Seleziona una cartella valida.")
             return
 
         file_paths = [
-            os.path.join(self.input_folder, filename)
-            for filename in os.listdir(self.input_folder)
+            os.path.join(root, filename)
+            for root, _, files in os.walk(self.input_folder)
+            for filename in files
             if filename.endswith(allowed_extensions)
         ]
-        total_files = len(file_paths)
 
         if not file_paths:
-            self.log_message("Nessun file video trovato.")
+            self.conversion_txt.log("Nessun file video trovato.")
             return
 
-        for index, input_path in enumerate(file_paths, start=1):
-            filenm = (
-                f"{os.path.splitext(os.path.basename(input_path))[0]}.mp4"
-                if self.output_folder
-                else f"{os.path.splitext(os.path.basename(input_path))[0]}_nw.mp4"
-            )
-            output_folder = (
-                self.output_folder
-                if self.output_folder
-                else os.path.dirname(input_path)
-            )
-            output_path = os.path.join(output_folder, filenm)
-            self.convert_video(input_path, output_path, index, total_files)
+        total_files = len(file_paths)
+        avg_tm = 0
+        eta = 0
 
-        self.status_label.config(text="Conversione batch completata!")
+        for index, input_path in enumerate(file_paths, start=1):
+            if self.ffmpeg_process is None:
+                break
+
+            if self.time_files:
+                avg_tm = sum(self.time_files) / len(self.time_files)
+                eta = avg_tm * (total_files - index)
+
+            self.status_label.config(
+                text=f"Conversione: {index}/{total_files} - TMV: {self.convert_seconds(avg_tm)} - ETA: {self.convert_seconds(eta)}"
+            )
+
+            bitrate = (
+                self.utls.get_bitrate(input_path) if self.bitrate_max.get() else None
+            )
+            if bitrate and bitrate < self.bitrate_max.get():
+                self.conversion_txt.log(
+                    f"{os.path.basename(input_path)} è stato saltato perché ha un bitrate minore della soglia ({bitrate})/({self.bitrate_max.get()})."
+                )
+                continue
+
+            file_name, _ = os.path.splitext(os.path.basename(input_path))
+            filenm = f"{file_name}.mp4" if self.output_folder else f"{file_name}_nw.mp4"
+            output_folder = self.output_folder or os.path.dirname(input_path)
+            output_path = os.path.join(output_folder, filenm)
+
+            start_time = perf_counter()
+            self.convert_video(
+                input_path, output_path
+            )  # Esegui la conversione del video
+            elapsed_time = perf_counter() - start_time
+            self.time_files.append(elapsed_time)
+
+            if self.ffmpeg_process:
+                self.conversion_txt.log(
+                    f"Conversione di {os.path.basename(input_path)} completata in {self.convert_seconds(elapsed_time)}"
+                )
+            else:
+                os.remove(output_path)
+                self.conversion_txt.log(
+                    f"Conversione di {os.path.basename(input_path)} interrotta."
+                )
+                
+
         self.progress_bar["value"] = 0
+        self.start_button.config(state=tk.NORMAL)
+        self.file_label.config(text="")
+        self.status_label.config(
+            text=(
+                f"Conversione batch completata in {self.convert_seconds(sum(self.time_files))}"
+                if self.ffmpeg_process
+                else "Conversione batch interrotta."
+            )
+        )
 
     def start_conversion(self):
         threading.Thread(target=self.batch_convert, daemon=True).start()

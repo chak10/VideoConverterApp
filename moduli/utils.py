@@ -1,7 +1,13 @@
 import subprocess, json, os
+import tkinter as tk
 from datetime import datetime
 
+
 class Utils:
+
+    def __init__(self, ffmpeg_path=None, ffprobe_path=None):
+        self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = ffprobe_path
 
     def get_dynamic_cq(
         self, width, height, min_cq=16, max_cq=30, output_resolution=(1280, 720)
@@ -56,7 +62,36 @@ class Utils:
             dynamic_crf = max(min_crf, dynamic_crf)
 
         return dynamic_crf
-    
+
+    def get_bitrate(self, file_path):
+        """
+        Ottiene il bitrate del file video usando ffprobe.
+        Ritorna il bitrate in kbps o None in caso di errore.
+        """
+        try:
+            result = subprocess.run(
+                [
+                    self.ffprobe_path,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "format=bit_rate",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    file_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                text=True,
+            )
+            bitrate = int(result.stdout.strip())
+            return bitrate // 1000  # Converti in kbps
+        except (ValueError, subprocess.SubprocessError):
+            return None
+
     def get_mediainfo(self, video_path):
         """Ottieni dettagli mediainfo (video e audio) del file utilizzando ffprobe."""
         command = [
@@ -85,14 +120,14 @@ class Utils:
 
             # Verifica se il comando è stato eseguito correttamente
             if process.returncode != 0:
-                #self.log_message(f"Errore ottenendo mediainfo per {video_path}: {stderr}")
+                # self.log_message(f"Errore ottenendo mediainfo per {video_path}: {stderr}")
                 return {}
 
             # Decodifica l'output JSON
             try:
                 info = json.loads(stdout)
             except json.JSONDecodeError:
-                #self.log_message(f"Errore di decodifica JSON per {video_path}")
+                # self.log_message(f"Errore di decodifica JSON per {video_path}")
                 return {}
 
             # Estrai informazioni generali e sui flussi
@@ -167,9 +202,21 @@ class Utils:
 
         except subprocess.SubprocessError as e:
             # Cattura eventuali errori del subprocess
-            #self.log_message(f"Errore eseguendo ffprobe per {video_path}: {str(e)}")
+            # self.log_message(f"Errore eseguendo ffprobe per {video_path}: {str(e)}")
             return {}
-    
+
     def parse_time_to_seconds(self, time_str):
         h, m, s = map(float, time_str.split(":"))
         return h * 3600 + m * 60 + s
+
+class Logger:
+    def __init__(self, log_area):
+        self.log_area = log_area
+
+    def log(self, message, level="info"):
+        levels = {"info": "[INFO]", "warning": "[WARNING]", "error": "[ERROR]"}
+        prefix = levels.get(level, "[INFO]")
+        current_time = datetime.now()
+        formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
+        self.log_area.insert(tk.END, f"{formatted_time} - {prefix} - {message}\n")
+        self.log_area.see(tk.END)
