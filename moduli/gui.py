@@ -80,6 +80,7 @@ class VideoConverterApp:
         )
         self.ffmpeg_process = False
         self.time_files = []
+        self.size_files = []
         self.utls = Utils(ffprobe_path=self.ffprobe_path)
         self.downloader = FFmpegDownloader(target_dir=self.target_dir)
         # Creazione del tema personalizzato
@@ -697,6 +698,8 @@ class VideoConverterApp:
             self.utls.get_mediainfo(input_path) if self.save_mediainfo.get() else {}
         )
 
+        initial_size = os.path.getsize(input_path)
+
         command = [
             self.ffmpeg_path,
             "-y",
@@ -763,6 +766,8 @@ class VideoConverterApp:
                 self.file_label.update_idletasks()
 
             process.wait()
+
+            self.size_files.append(initial_size - os.path.getsize(output_path))
 
             # Azioni post-processo
             if self.ffmpeg_process:
@@ -896,21 +901,11 @@ class VideoConverterApp:
             return
 
         total_files = len(file_paths)
-        avg_tm = 0
-        eta = 0
 
+        cleaned_total_files = 0
+        cleaned_file_paths = []
+        
         for index, input_path in enumerate(file_paths, start=1):
-            if self.ffmpeg_process is None:
-                break
-
-            if self.time_files:
-                avg_tm = sum(self.time_files) / len(self.time_files)
-                eta = avg_tm * (total_files - index)
-
-            self.status_label.config(
-                text=f"Conversione: {index}/{total_files} - TMV: {self.convert_seconds(avg_tm)} - ETA: {self.convert_seconds(eta)}"
-            )
-
             bitrate = (
                 self.utls.get_bitrate(input_path) if self.bitrate_max.get() else None
             )
@@ -919,6 +914,23 @@ class VideoConverterApp:
                     f"{os.path.basename(input_path)} è stato saltato perché ha un bitrate minore della soglia ({bitrate})/({self.bitrate_max.get()})."
                 )
                 continue
+            cleaned_total_files += 1
+            cleaned_file_paths.append(input_path)
+        
+        avg_tm = 0
+        eta = 0
+
+        for index, input_path in enumerate(cleaned_file_paths, start=1):
+            if self.ffmpeg_process is None:
+                break
+
+            if self.time_files:
+                avg_tm = sum(self.time_files) / len(self.time_files)
+                eta = avg_tm * (cleaned_total_files - index)
+
+            self.status_label.config(
+                text=f"Conversione: {index}/{cleaned_total_files} di {total_files} - TMV: {self.convert_seconds(avg_tm)} - ETA: {self.convert_seconds(eta)}"
+            )
 
             file_name, _ = os.path.splitext(os.path.basename(input_path))
             filenm = f"{file_name}.mp4" if self.output_folder else f"{file_name}_nw.mp4"
@@ -941,18 +953,26 @@ class VideoConverterApp:
                 self.conversion_txt.log(
                     f"Conversione di {os.path.basename(input_path)} interrotta."
                 )
-                
 
         self.progress_bar["value"] = 0
         self.start_button.config(state=tk.NORMAL)
         self.file_label.config(text="")
+        space_reduction = sum(self.size_files)
         self.status_label.config(
             text=(
-                f"Conversione batch completata in {self.convert_seconds(sum(self.time_files))}"
+                f"Conversione batch completata in {self.convert_seconds(sum(self.time_files))} - Spazio Recuperato: {self.format_size(space_reduction)}"
                 if self.ffmpeg_process
                 else "Conversione batch interrotta."
             )
         )
+
+    def format_size(self, size_in_bytes):
+        if size_in_bytes:
+            for unit in ["B", "KB", "MB", "GB", "TB"]:
+                if size_in_bytes < 1024:
+                    return f"{size_in_bytes:.2f} {unit}"
+                size_in_bytes /= 1024
+        return "0 Bytes"
 
     def start_conversion(self):
         threading.Thread(target=self.batch_convert, daemon=True).start()
